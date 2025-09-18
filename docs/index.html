@@ -4,7 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zelle - Send Money Instantly</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+    <!-- Fallback for when Font Awesome fails to load -->
+    <script>
+        // Check if Font Awesome loaded, if not add fallback styles
+        document.addEventListener('DOMContentLoaded', function() {
+            const testIcon = document.createElement('i');
+            testIcon.className = 'fas fa-home';
+            testIcon.style.position = 'absolute';
+            testIcon.style.left = '-9999px';
+            document.body.appendChild(testIcon);
+            
+            const styles = window.getComputedStyle(testIcon);
+            if (styles.fontFamily.indexOf('Font Awesome') === -1) {
+                // Font Awesome failed to load, add fallback styles
+                const fallbackCSS = `
+                    .fas::before, .far::before { font-family: inherit !important; }
+                    .fa-money-bill-transfer::before { content: '💳'; }
+                    .fa-paper-plane::before { content: '📤'; }
+                    .fa-hand-holding-dollar::before { content: '💰'; }
+                    .fa-users::before { content: '👥'; }
+                    .fa-eye::before { content: '👁'; }
+                    .fa-check-circle::before { content: '✅'; }
+                    .fa-arrow-left::before { content: '←'; }
+                    .fa-info-circle::before { content: 'ℹ'; }
+                `;
+                const style = document.createElement('style');
+                style.textContent = fallbackCSS;
+                document.head.appendChild(style);
+            }
+            document.body.removeChild(testIcon);
+        });
+    </script>
     <style>
         :root {
             --primary-color: #5c2d91;
@@ -134,8 +165,267 @@
     </header>
     <!-- Home Section -->
     <section class="app-section active" id="home">
-        <!-- ... rest of HTML ... -->
+        <div class="container">
+            <div class="dashboard">
+                <div class="balance">$1,234.56</div>
+                <div class="quick-actions">
+                    <button class="btn btn-primary" onclick="showSection('send')">
+                        <i class="fas fa-paper-plane"></i> Send Money
+                    </button>
+                    <button class="btn btn-outline" onclick="showSection('request')">
+                        <i class="fas fa-hand-holding-dollar"></i> Request Money
+                    </button>
+                    <button class="btn btn-success" onclick="showSection('split')">
+                        <i class="fas fa-users"></i> Split Bill
+                    </button>
+                </div>
+                <div class="transactions-list">
+                    <h3>Recent Transactions</h3>
+                    <div class="transaction sent">
+                        <div class="transaction-details">
+                            <div><strong>John Smith</strong></div>
+                            <div style="color: #6c757d; font-size: 14px;">Dinner split</div>
+                        </div>
+                        <div class="transaction-amount">-$25.00</div>
+                    </div>
+                    <div class="transaction received">
+                        <div class="transaction-details">
+                            <div><strong>Sarah Johnson</strong></div>
+                            <div style="color: #6c757d; font-size: 14px;">Movie tickets</div>
+                        </div>
+                        <div class="transaction-amount">+$15.00</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </section>
-    <!-- (Full index.html content truncated for brevity) -->
+
+    <!-- Send Money Section -->
+    <section class="app-section" id="send">
+        <div class="container">
+            <div class="form-container">
+                <h2 class="form-title">
+                    <i class="fas fa-paper-plane"></i> Send Money
+                </h2>
+                <form id="sendForm">
+                    <div class="form-group">
+                        <label for="recipientEmail">Recipient Email or Phone</label>
+                        <input type="text" class="form-control" id="recipientEmail" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sendAmount">Amount</label>
+                        <input type="number" class="form-control" id="sendAmount" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sendNote">Note (Optional)</label>
+                        <input type="text" class="form-control" id="sendNote" placeholder="What's this for?">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fas fa-eye"></i> Preview & Send
+                    </button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- Confirmation Screen -->
+    <section class="app-section" id="confirm">
+        <div class="container">
+            <div class="form-container">
+                <h2 class="form-title">
+                    <i class="fas fa-check-circle"></i> Confirm Payment
+                </h2>
+                <div class="confirm-screen" id="confirmationDetails">
+                    <div class="confirm-row">
+                        <span class="confirm-label">To:</span>
+                        <span id="confirmRecipient"></span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Amount:</span>
+                        <span id="confirmAmount"></span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Note:</span>
+                        <span id="confirmNote"></span>
+                    </div>
+                </div>
+                <button id="confirmSendBtn" class="btn btn-success" style="width: 100%; margin-bottom: 10px;">
+                    <i class="fas fa-paper-plane"></i> Send Money
+                </button>
+                <button onclick="showSection('send')" class="btn btn-outline" style="width: 100%;">
+                    <i class="fas fa-arrow-left"></i> Back to Edit
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Request Money Section -->
+    <section class="app-section" id="request">
+        <div class="container">
+            <div class="form-container">
+                <h2 class="form-title">
+                    <i class="fas fa-hand-holding-dollar"></i> Request Money
+                </h2>
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i> Send a money request to someone via email or text.
+                </div>
+                <form id="requestForm">
+                    <div class="form-group">
+                        <label for="requestEmail">From (Email or Phone)</label>
+                        <input type="text" class="form-control" id="requestEmail" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="requestAmount">Amount</label>
+                        <input type="number" class="form-control" id="requestAmount" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="requestNote">What's this for?</label>
+                        <input type="text" class="form-control" id="requestNote" placeholder="e.g., Split dinner bill">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fas fa-paper-plane"></i> Send Request
+                    </button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- Split Bill Section -->
+    <section class="app-section" id="split">
+        <div class="container">
+            <div class="form-container">
+                <h2 class="form-title">
+                    <i class="fas fa-users"></i> Split Bill
+                </h2>
+                <form id="splitForm">
+                    <div class="form-group">
+                        <label for="totalAmount">Total Bill Amount</label>
+                        <input type="number" class="form-control" id="totalAmount" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="splitPeople">Number of People</label>
+                        <input type="number" class="form-control" id="splitPeople" min="2" value="2" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Amount per person: <span id="splitResult">$0.00</span></label>
+                    </div>
+                    <div class="form-group">
+                        <label for="splitNote">What's this for?</label>
+                        <input type="text" class="form-control" id="splitNote" placeholder="e.g., Dinner at restaurant">
+                    </div>
+                    <button type="submit" class="btn btn-success" style="width: 100%;">
+                        <i class="fas fa-users"></i> Send Split Requests
+                    </button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        // Show/hide sections
+        function showSection(sectionName) {
+            // Hide all sections
+            document.querySelectorAll('.app-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            // Show selected section
+            document.getElementById(sectionName).classList.add('active');
+            
+            // Update navigation
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            document.querySelector(`[data-section="${sectionName}"]`)?.classList.add('active');
+        }
+
+        // Navigation handling
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const section = e.target.getAttribute('data-section');
+                showSection(section);
+            });
+        });
+
+        // Send form handling
+        document.getElementById('sendForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const recipient = document.getElementById('recipientEmail').value;
+            const amount = document.getElementById('sendAmount').value;
+            const note = document.getElementById('sendNote').value || 'No note';
+            
+            // Show confirmation details
+            document.getElementById('confirmRecipient').textContent = recipient;
+            document.getElementById('confirmAmount').textContent = '$' + parseFloat(amount).toFixed(2);
+            document.getElementById('confirmNote').textContent = note;
+            
+            // Show confirmation screen
+            showSection('confirm');
+        });
+
+        // Confirm send button - fixed syntax error
+        document.getElementById('confirmSendBtn').addEventListener('click', function() {
+            const amount = document.getElementById('confirmAmount').textContent.replace('$', '');
+            const numericAmount = parseFloat(amount);  // Fixed: Added missing closing parenthesis
+            
+            if (numericAmount > 0) {
+                // Show spinner
+                this.innerHTML = '<div class="spinner"></div> Sending...';
+                this.disabled = true;
+                
+                // Simulate API call
+                setTimeout(() => {
+                    alert('Money sent successfully!');
+                    showSection('home');
+                    
+                    // Reset form
+                    document.getElementById('sendForm').reset();
+                    this.innerHTML = '<i class="fas fa-paper-plane"></i> Send Money';
+                    this.disabled = false;
+                }, 2000);
+            }
+        });
+
+        // Request form handling
+        document.getElementById('requestForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            alert('Money request sent successfully!');
+            this.reset();
+        });
+
+        // Split bill calculation
+        function updateSplitCalculation() {
+            const total = parseFloat(document.getElementById('totalAmount').value) || 0;
+            const people = parseInt(document.getElementById('splitPeople').value) || 2;
+            const perPerson = total / people;
+            document.getElementById('splitResult').textContent = '$' + perPerson.toFixed(2);
+        }
+
+        document.getElementById('totalAmount').addEventListener('input', updateSplitCalculation);
+        document.getElementById('splitPeople').addEventListener('input', updateSplitCalculation);
+
+        // Split form handling
+        document.getElementById('splitForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            alert('Split bill requests sent successfully!');
+            this.reset();
+            document.getElementById('splitResult').textContent = '$0.00';
+        });
+
+        // Auth button handling (placeholder)
+        document.getElementById('login-btn').addEventListener('click', function() {
+            alert('Login functionality would be implemented here');
+        });
+
+        document.getElementById('signup-btn').addEventListener('click', function() {
+            alert('Signup functionality would be implemented here');
+        });
+
+        document.getElementById('logout-btn').addEventListener('click', function() {
+            alert('Logout functionality would be implemented here');
+        });
+    </script>
 </body>
 </html>
