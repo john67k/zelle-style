@@ -4,6 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zelle - Send Money Instantly</title>
+    
+    <!-- PWA Support -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#5c2d91">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Zelle">
+    <link rel="apple-touch-icon" href="icons/icon-192x192.png">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16x16.png">
+    
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer">
     <!-- Fallback for when Font Awesome fails to load -->
     <script>
@@ -322,6 +335,92 @@
     </section>
 
     <script>
+        // API Configuration - configurable for different environments
+        const API_CONFIG = {
+            baseURL: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+                ? 'http://localhost:3001' 
+                : `${window.location.protocol}//${window.location.hostname}`,
+            apiPath: '/api'
+        };
+        
+        const API_BASE = `${API_CONFIG.baseURL}${API_CONFIG.apiPath}`;
+
+        // Service Worker Registration for PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    const registration = await navigator.serviceWorker.register('/sw.js', {
+                        scope: '/'
+                    });
+                    console.log('✅ Service Worker registered successfully:', registration.scope);
+                    
+                    // Check for updates
+                    registration.addEventListener('updatefound', () => {
+                        const newWorker = registration.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                // New content is available, refresh to use it
+                                if (confirm('New version available! Refresh to update?')) {
+                                    window.location.reload();
+                                }
+                            }
+                        });
+                    });
+                } catch (error) {
+                    console.error('❌ Service Worker registration failed:', error);
+                }
+            });
+        }
+
+        // PWA Install Prompt
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            showInstallPrompt();
+        });
+
+        function showInstallPrompt() {
+            const installButton = document.createElement('button');
+            installButton.className = 'btn btn-primary install-prompt';
+            installButton.innerHTML = '<i class="fas fa-download"></i> Install App';
+            installButton.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 1000; border-radius: 50px; padding: 12px 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);';
+            
+            installButton.addEventListener('click', async () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const { outcome } = await deferredPrompt.userChoice;
+                    console.log(`PWA install outcome: ${outcome}`);
+                    deferredPrompt = null;
+                    document.body.removeChild(installButton);
+                }
+            });
+            
+            document.body.appendChild(installButton);
+            
+            // Remove prompt after 10 seconds if not clicked
+            setTimeout(() => {
+                if (installButton.parentNode) {
+                    document.body.removeChild(installButton);
+                }
+            }, 10000);
+        }
+
+        // Global error handling for better UX
+        window.addEventListener('error', (e) => {
+            console.error('Application error:', e.error);
+            showAlert('An unexpected error occurred. Please try again.', 'danger');
+        });
+
+        // Network status monitoring
+        window.addEventListener('online', () => {
+            showAlert('You are back online!', 'success');
+        });
+
+        window.addEventListener('offline', () => {
+            showAlert('You are offline. Some features may not work.', 'warning');
+        });
+
         // Show/hide sections
         function showSection(sectionName) {
             // Hide all sections
@@ -348,52 +447,276 @@
             });
         });
 
-        // Send form handling
+        // Authentication state management
+        let currentUser = null;
+        let authToken = localStorage.getItem('authToken');
+
+        // Utility functions
+        function showAlert(message, type = 'info', duration = 5000) {
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            alert.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 10000; max-width: 300px;';
+            
+            document.body.appendChild(alert);
+            
+            setTimeout(() => {
+                if (alert.parentNode) {
+                    document.body.removeChild(alert);
+                }
+            }, duration);
+        }
+
+        function setLoadingState(button, loading = true) {
+            if (loading) {
+                button.dataset.originalText = button.innerHTML;
+                button.innerHTML = '<div class="spinner"></div> Loading...';
+                button.disabled = true;
+            } else {
+                button.innerHTML = button.dataset.originalText || button.innerHTML;
+                button.disabled = false;
+            }
+        }
+
+        async function apiCall(endpoint, options = {}) {
+            const url = `${API_BASE}${endpoint}`;
+            const config = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authToken && { 'Authorization': `Bearer ${authToken}` })
+                },
+                ...options
+            };
+
+            try {
+                const response = await fetch(url, config);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    if (response.status === 403 && data.code === 'EMAIL_NOT_VERIFIED') {
+                        showAlert('Please verify your email before sending money', 'warning');
+                        showSection('verify');
+                        return;
+                    }
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+
+                return data;
+            } catch (error) {
+                console.error('API Error:', error);
+                if (error.message.includes('fetch')) {
+                    showAlert('Network error. Please check your connection.', 'danger');
+                } else {
+                    showAlert(error.message, 'danger');
+                }
+                throw error;
+            }
+        }
+
+        // Send form handling with API integration
         document.getElementById('sendForm').addEventListener('submit', function(e) {
             e.preventDefault();
             
             const recipient = document.getElementById('recipientEmail').value;
             const amount = document.getElementById('sendAmount').value;
-            const note = document.getElementById('sendNote').value || 'No note';
+            const note = document.getElementById('sendNote').value || '';
+            
+            // Validate inputs
+            if (!recipient || !amount || parseFloat(amount) <= 0) {
+                showAlert('Please fill in all required fields with valid values', 'danger');
+                return;
+            }
             
             // Show confirmation details
             document.getElementById('confirmRecipient').textContent = recipient;
             document.getElementById('confirmAmount').textContent = '$' + parseFloat(amount).toFixed(2);
-            document.getElementById('confirmNote').textContent = note;
+            document.getElementById('confirmNote').textContent = note || 'No note';
             
             // Show confirmation screen
             showSection('confirm');
         });
 
-        // Confirm send button - fixed syntax error
-        document.getElementById('confirmSendBtn').addEventListener('click', function() {
+        // Confirm send button with API integration
+        document.getElementById('confirmSendBtn').addEventListener('click', async function() {
+            const recipient = document.getElementById('confirmRecipient').textContent;
             const amount = document.getElementById('confirmAmount').textContent.replace('$', '');
-            const numericAmount = parseFloat(amount);  // Fixed: Added missing closing parenthesis
+            const note = document.getElementById('confirmNote').textContent;
             
-            if (numericAmount > 0) {
-                // Show spinner
-                this.innerHTML = '<div class="spinner"></div> Sending...';
-                this.disabled = true;
+            setLoadingState(this, true);
+            
+            try {
+                const result = await apiCall('/transactions/send', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        recipientEmail: recipient,
+                        amount: parseFloat(amount),
+                        note: note === 'No note' ? '' : note
+                    })
+                });
+
+                showAlert('Money sent successfully!', 'success');
+                showSection('dashboard'); // Show dashboard with updated balance
                 
-                // Simulate API call
-                setTimeout(() => {
-                    alert('Money sent successfully!');
-                    showSection('home');
-                    
-                    // Reset form
-                    document.getElementById('sendForm').reset();
-                    this.innerHTML = '<i class="fas fa-paper-plane"></i> Send Money';
-                    this.disabled = false;
-                }, 2000);
+                // Reset form
+                document.getElementById('sendForm').reset();
+                
+                // Update balance if available
+                if (result.newBalance !== undefined) {
+                    updateUserBalance(result.newBalance);
+                }
+                
+            } catch (error) {
+                console.error('Send money error:', error);
+            } finally {
+                setLoadingState(this, false);
             }
         });
 
-        // Request form handling
-        document.getElementById('requestForm').addEventListener('submit', function(e) {
+        // Request form handling with API integration
+        document.getElementById('requestForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            alert('Money request sent successfully!');
-            this.reset();
+            
+            const requesteeEmail = document.getElementById('requesteeEmail').value;
+            const amount = document.getElementById('requestAmount').value;
+            const note = document.getElementById('requestNote').value || '';
+            
+            if (!requesteeEmail || !amount || parseFloat(amount) <= 0) {
+                showAlert('Please fill in all required fields with valid values', 'danger');
+                return;
+            }
+
+            const submitBtn = this.querySelector('button[type="submit"]');
+            setLoadingState(submitBtn, true);
+            
+            try {
+                await apiCall('/transactions/request', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        requesteeEmail,
+                        amount: parseFloat(amount),
+                        note
+                    })
+                });
+
+                showAlert('Money request sent successfully!', 'success');
+                this.reset();
+                
+            } catch (error) {
+                console.error('Request money error:', error);
+            } finally {
+                setLoadingState(submitBtn, false);
+            }
         });
+
+        // Authentication functions
+        async function register(name, email, phone, password) {
+            try {
+                const result = await apiCall('/auth/register', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, email, phone, password })
+                });
+                
+                showAlert('Registration successful! Please check your email for verification.', 'success');
+                showSection('verify');
+                return result;
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        async function login(email, password) {
+            try {
+                const result = await apiCall('/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ email, password })
+                });
+                
+                authToken = result.token;
+                localStorage.setItem('authToken', authToken);
+                currentUser = result.user;
+                
+                showAlert('Login successful!', 'success');
+                showSection('dashboard');
+                updateUserInterface();
+                return result;
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        async function verifyEmail(email, code) {
+            try {
+                const result = await apiCall('/auth/verify-email', {
+                    method: 'POST',
+                    body: JSON.stringify({ email, code })
+                });
+                
+                authToken = result.token;
+                localStorage.setItem('authToken', authToken);
+                currentUser = result.user;
+                
+                showAlert('Email verified successfully!', 'success');
+                showSection('dashboard');
+                updateUserInterface();
+                return result;
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        function logout() {
+            authToken = null;
+            currentUser = null;
+            localStorage.removeItem('authToken');
+            showSection('home');
+            updateUserInterface();
+            showAlert('Logged out successfully', 'info');
+        }
+
+        function updateUserInterface() {
+            const isLoggedIn = !!currentUser;
+            
+            // Toggle auth buttons
+            document.getElementById('login-btn').style.display = isLoggedIn ? 'none' : 'inline-block';
+            document.getElementById('register-btn').style.display = isLoggedIn ? 'none' : 'inline-block';
+            document.getElementById('logout-btn').style.display = isLoggedIn ? 'inline-block' : 'none';
+            
+            // Update navigation
+            const dashboardNav = document.querySelector('[data-section="dashboard"]');
+            if (dashboardNav) {
+                dashboardNav.style.display = isLoggedIn ? 'inline-block' : 'none';
+            }
+            
+            // Update user info if available
+            if (currentUser) {
+                updateUserBalance(currentUser.balance);
+                // Update any user name displays
+                document.querySelectorAll('.user-name').forEach(el => {
+                    el.textContent = currentUser.name;
+                });
+            }
+        }
+
+        function updateUserBalance(balance) {
+            const balanceElements = document.querySelectorAll('.user-balance');
+            balanceElements.forEach(el => {
+                el.textContent = '$' + balance.toFixed(2);
+            });
+        }
+
+        // Load user profile if token exists
+        async function loadUserProfile() {
+            if (!authToken) return;
+            
+            try {
+                const result = await apiCall('/auth/profile');
+                currentUser = result.user;
+                updateUserInterface();
+            } catch (error) {
+                console.error('Failed to load user profile:', error);
+                logout(); // Clear invalid token
+            }
+        }
 
         // Split bill calculation
         function updateSplitCalculation() {
@@ -414,17 +737,109 @@
             document.getElementById('splitResult').textContent = '$0.00';
         });
 
-        // Auth button handling (placeholder)
+        // Auth button handling with proper integration
         document.getElementById('login-btn').addEventListener('click', function() {
-            alert('Login functionality would be implemented here');
+            showSection('login');
         });
 
-        document.getElementById('signup-btn').addEventListener('click', function() {
-            alert('Signup functionality would be implemented here');
+        document.getElementById('register-btn').addEventListener('click', function() {
+            showSection('register');
         });
 
         document.getElementById('logout-btn').addEventListener('click', function() {
-            alert('Logout functionality would be implemented here');
+            logout();
+        });
+
+        // Form submissions for auth
+        if (document.getElementById('loginForm')) {
+            document.getElementById('loginForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const email = document.getElementById('loginEmail').value;
+                const password = document.getElementById('loginPassword').value;
+                
+                const submitBtn = this.querySelector('button[type="submit"]');
+                setLoadingState(submitBtn, true);
+                
+                try {
+                    await login(email, password);
+                } catch (error) {
+                    // Error already handled in login function
+                } finally {
+                    setLoadingState(submitBtn, false);
+                }
+            });
+        }
+
+        if (document.getElementById('registerForm')) {
+            document.getElementById('registerForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const name = document.getElementById('registerName').value;
+                const email = document.getElementById('registerEmail').value;
+                const phone = document.getElementById('registerPhone').value;
+                const password = document.getElementById('registerPassword').value;
+                
+                const submitBtn = this.querySelector('button[type="submit"]');
+                setLoadingState(submitBtn, true);
+                
+                try {
+                    await register(name, email, phone, password);
+                } catch (error) {
+                    // Error already handled in register function
+                } finally {
+                    setLoadingState(submitBtn, false);
+                }
+            });
+        }
+
+        if (document.getElementById('verifyForm')) {
+            document.getElementById('verifyForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const email = document.getElementById('verifyEmail').value;
+                const code = document.getElementById('verifyCode').value;
+                
+                const submitBtn = this.querySelector('button[type="submit"]');
+                setLoadingState(submitBtn, true);
+                
+                try {
+                    await verifyEmail(email, code);
+                } catch (error) {
+                    // Error already handled in verifyEmail function
+                } finally {
+                    setLoadingState(submitBtn, false);
+                }
+            });
+        }
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            updateUserInterface();
+            if (authToken) {
+                loadUserProfile();
+            }
+            
+            // Auto-focus verification code input
+            const verifyCodeInputs = document.querySelectorAll('.verification-input');
+            if (verifyCodeInputs.length > 0) {
+                verifyCodeInputs[0].focus();
+                
+                // Auto-advance verification code inputs
+                verifyCodeInputs.forEach((input, index) => {
+                    input.addEventListener('input', function() {
+                        if (this.value.length === 1 && index < verifyCodeInputs.length - 1) {
+                            verifyCodeInputs[index + 1].focus();
+                        }
+                    });
+                    
+                    input.addEventListener('keydown', function(e) {
+                        if (e.key === 'Backspace' && this.value === '' && index > 0) {
+                            verifyCodeInputs[index - 1].focus();
+                        }
+                    });
+                });
+            }
         });
     </script>
 </body>

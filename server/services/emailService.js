@@ -5,6 +5,95 @@ class EmailService {
   constructor() {
     this.verificationCodes = new Map(); // In production, use Redis or database
     this.rateLimits = new Map(); // Track email sending rates
+    this.failedEmails = new Map(); // Track failed emails for retry
+    this.emailLogs = []; // Store email sending logs
+  }
+
+  // Enhanced email sending with retry logic and logging
+  async sendEmailWithRetry(emailData, type = 'unknown', maxRetries = 3) {
+    const emailId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const logEntry = {
+      id: emailId,
+      to: emailData.to,
+      type,
+      timestamp: new Date().toISOString(),
+      attempts: 0,
+      success: false,
+      errors: []
+    };
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logEntry.attempts = attempt;
+        
+        // Calculate delay for exponential backoff (0, 2s, 8s for attempts 1, 2, 3)
+        if (attempt > 1) {
+          const delay = Math.pow(2, attempt - 2) * 2000; // 2s, 8s
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        await sgMail.send(emailData);
+        
+        logEntry.success = true;
+        logEntry.completedAt = new Date().toISOString();
+        this.emailLogs.push(logEntry);
+        
+        console.log(`✅ Email sent successfully (${type}):`, emailData.to, `(attempt ${attempt})`);
+        
+        // Remove from failed emails if it was there
+        this.failedEmails.delete(emailId);
+        
+        return { success: true, emailId, attempts: attempt };
+        
+      } catch (error) {
+        const errorMsg = error.message || 'Unknown error';
+        logEntry.errors.push({
+          attempt,
+          error: errorMsg,
+          timestamp: new Date().toISOString()
+        });
+        
+        console.error(`❌ Email send attempt ${attempt} failed (${type}):`, emailData.to, errorMsg);
+        
+        if (attempt === maxRetries) {
+          // Final failure - log and store for manual retry
+          logEntry.success = false;
+          logEntry.failedAt = new Date().toISOString();
+          this.emailLogs.push(logEntry);
+          this.failedEmails.set(emailId, { ...logEntry, emailData });
+          
+          console.error(`🚨 Email permanently failed after ${maxRetries} attempts (${type}):`, emailData.to);
+          throw new Error(`Failed to send email after ${maxRetries} attempts: ${errorMsg}`);
+        }
+      }
+    }
+  }
+
+  // Get email logs for admin dashboard
+  getEmailLogs(limit = 100) {
+    return this.emailLogs
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, limit);
+  }
+
+  // Get failed emails for admin dashboard
+  getFailedEmails() {
+    return Array.from(this.failedEmails.values());
+  }
+
+  // Manual retry for admin dashboard
+  async retryFailedEmail(emailId) {
+    const failedEmail = this.failedEmails.get(emailId);
+    if (!failedEmail) {
+      throw new Error('Failed email not found');
+    }
+
+    try {
+      const result = await this.sendEmailWithRetry(failedEmail.emailData, failedEmail.type);
+      return result;
+    } catch (error) {
+      throw new Error(`Retry failed: ${error.message}`);
+    }
   }
 
   // Rate limiting: max 3 verification emails per hour per email
@@ -52,19 +141,13 @@ class EmailService {
         from: emailConfig.from,
         subject: 'Verify Your Zelle Account',
         html: this.getVerificationTemplate(name, code),
-        // If using SendGrid dynamic templates:
-        // templateId: emailConfig.templates.verification,
-        // dynamicTemplateData: {
-        //   name,
-        //   verification_code: code,
-        //   expires_in: '10 minutes'
-        // }
+        text: `Hi ${name},\n\nYour Zelle verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this code, please ignore this email.\n\nBest regards,\nThe Zelle Team`
       };
       
-      await sgMail.send(msg);
+      const result = await this.sendEmailWithRetry(msg, 'verification');
       console.log(`Verification code sent to ${email}`);
       
-      return { success: true, expiresAt };
+      return { success: true, expiresAt, emailId: result.emailId };
     } catch (error) {
       console.error('Error sending verification email:', error);
       throw error;
@@ -80,7 +163,8 @@ class EmailService {
         transactionId,
         timestamp,
         note,
-        type // 'sent' or 'received'
+        type, // 'sent' or 'received'
+        senderName
       } = transactionData;
       
       const msg = {
@@ -88,15 +172,13 @@ class EmailService {
         from: emailConfig.from,
         subject: `Zelle ${type === 'sent' ? 'Payment Sent' : 'Payment Received'} - $${amount}`,
         html: this.getReceiptTemplate(transactionData),
-        // If using SendGrid dynamic templates:
-        // templateId: emailConfig.templates.receipt,
-        // dynamicTemplateData: transactionData
+        text: this.getReceiptTextTemplate(transactionData)
       };
       
-      await sgMail.send(msg);
+      const result = await this.sendEmailWithRetry(msg, 'receipt');
       console.log(`Receipt sent to ${email} for transaction ${transactionId}`);
       
-      return { success: true };
+      return { success: true, emailId: result.emailId };
     } catch (error) {
       console.error('Error sending receipt email:', error);
       throw error;
@@ -110,12 +192,13 @@ class EmailService {
         from: emailConfig.from,
         subject: 'Welcome to Zelle!',
         html: this.getWelcomeTemplate(name),
+        text: `Hi ${name},\n\nWelcome to Zelle! Your account has been successfully verified and you're ready to start sending and receiving money instantly.\n\nWith Zelle you can:\n- Send money instantly\n- Bank-level security\n- Easy to use\n- No fees\n\nGet started at your convenience.\n\nBest regards,\nThe Zelle Team`
       };
       
-      await sgMail.send(msg);
+      const result = await this.sendEmailWithRetry(msg, 'welcome');
       console.log(`Welcome email sent to ${email}`);
       
-      return { success: true };
+      return { success: true, emailId: result.emailId };
     } catch (error) {
       console.error('Error sending welcome email:', error);
       throw error;
@@ -375,6 +458,83 @@ class EmailService {
     </body>
     </html>
     `;
+  }
+
+  // Plain text template for Gmail compatibility
+  getReceiptTextTemplate(data) {
+    const {
+      recipientName,
+      recipientEmail,
+      amount,
+      transactionId,
+      timestamp,
+      note,
+      type,
+      senderName
+    } = data;
+
+    const formattedDate = new Date(timestamp).toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short'
+    });
+
+    if (type === 'sent') {
+      return `
+PAYMENT SENT CONFIRMATION
+
+Hi ${senderName},
+
+Your payment has been sent successfully!
+
+TRANSACTION DETAILS:
+Transaction ID: ${transactionId}
+Recipient: ${recipientName} (${recipientEmail})
+Amount: $${amount.toFixed(2)}
+Date: ${formattedDate}
+${note ? `Note: ${note}` : ''}
+
+Your money was sent instantly and securely through Zelle.
+
+WHAT'S NEXT?
+- ${recipientName} will receive a notification about the payment
+- Funds are typically available within minutes
+- You can view this transaction in your Zelle activity
+
+Need help? Visit our Help Center or contact support.
+
+© 2025 Zelle. All rights reserved.
+      `.trim();
+    } else {
+      return `
+PAYMENT RECEIVED NOTIFICATION
+
+Hi ${recipientName},
+
+You've received a payment!
+
+TRANSACTION DETAILS:
+Transaction ID: ${transactionId}
+From: ${senderName} (${data.senderEmail || 'N/A'})
+Amount: $${amount.toFixed(2)}
+Date: ${formattedDate}
+${note ? `Note: ${note}` : ''}
+
+The money has been securely transferred to your account through Zelle.
+
+WHAT'S NEXT?
+- Check your bank account - the funds are typically available within minutes
+- You can view this transaction in your Zelle activity
+- Consider sending a thank you message to ${senderName}
+
+Need help? Visit our Help Center or contact support.
+
+© 2025 Zelle. All rights reserved.
+      `.trim();
+    }
   }
 }
 

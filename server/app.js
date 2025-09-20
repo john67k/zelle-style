@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const authRoutes = require('./routes/auth');
 const transactionRoutes = require('./routes/transactions');
+const adminRoutes = require('./routes/admin');
 
 // Load environment variables
 require('dotenv').config();
@@ -35,6 +36,7 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes.router);
 app.use('/api/transactions', transactionRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Test email endpoint (remove in production)
 if (process.env.NODE_ENV !== 'production') {

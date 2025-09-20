@@ -30,6 +30,14 @@ router.post('/send', authenticateToken, apiLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Sender not found' });
     }
 
+    // Check if sender is verified - CRITICAL SECURITY CHECK
+    if (!sender.verified) {
+      return res.status(403).json({ 
+        error: 'Please verify your email address before sending money',
+        code: 'EMAIL_NOT_VERIFIED' 
+      });
+    }
+
     // Check balance
     if (sender.balance < amount) {
       return res.status(400).json({ error: 'Insufficient funds' });
@@ -127,6 +135,14 @@ router.post('/request', authenticateToken, apiLimiter, async (req, res) => {
     const requester = users.get(requesterEmail);
     if (!requester) {
       return res.status(404).json({ error: 'Requester not found' });
+    }
+
+    // Check if requester is verified - CRITICAL SECURITY CHECK
+    if (!requester.verified) {
+      return res.status(403).json({ 
+        error: 'Please verify your email address before requesting money',
+        code: 'EMAIL_NOT_VERIFIED' 
+      });
     }
 
     // Generate request ID
